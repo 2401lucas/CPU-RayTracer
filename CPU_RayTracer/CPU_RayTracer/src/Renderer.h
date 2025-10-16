@@ -13,7 +13,7 @@ class Renderer {
  private:
   void IntersectScene(Rays* input_rays);
   int CountActiveMasks(Rays* input_rays);
-  void CompactRays(Rays* rays, float* image);
+  void CompactRays(Rays* rays, float* image, float contrib_factor = 1);
 
   Scene* _scene;
 };

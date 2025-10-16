@@ -34,6 +34,7 @@ void Renderer::Render(const char* filename, const uint32_t width,
   float* image = new float[total_pixels];
   std::fill(image, image + total_pixels, 0);
   auto padded_ray_count = padded_width * height * samples;
+  float r_samples = 1.f / samples;
   Camera camera(padded_width, height, 90.0f, glm::vec3(0.0f, 0.0f, 0.0f),
                 glm::vec3(0.0f, 0.0f, 1.0f), 0.0f, 1.0f);
 
@@ -45,7 +46,7 @@ void Renderer::Render(const char* filename, const uint32_t width,
 
     int active = CountActiveMasks(rays);
     if (active < rays->count * 0.5f) {
-      CompactRays(rays, image);
+      CompactRays(rays, image, r_samples);
     }
   }
 
@@ -56,9 +57,9 @@ void Renderer::Render(const char* filename, const uint32_t width,
   stbi_write_png(filename, padded_width, height, CHANNEL_NUM, final_image,
                  padded_width * CHANNEL_NUM);
 
-   delete rays;
-   delete[] image;
-   delete[] final_image;
+  delete rays;
+  delete[] image;
+  delete[] final_image;
 }
 
 void Renderer::IntersectScene(Rays* input_rays) {
@@ -213,7 +214,7 @@ int Renderer::CountActiveMasks(Rays* input_rays) {
   return total;
 }
 
-void Renderer::CompactRays(Rays* rays, float* image) {
+void Renderer::CompactRays(Rays* rays, float* image, float contrib_factor) {
   int writeIdx = 0;
   for (int i = 0; i < rays->count; i++) {
     if (rays->mask[i]) {
@@ -233,9 +234,9 @@ void Renderer::CompactRays(Rays* rays, float* image) {
       writeIdx++;
     } else {
       int pixel = rays->pixel_index[i] * CHANNEL_NUM;
-      image[pixel + 0] += rays->color_r[i];
-      image[pixel + 1] += rays->color_g[i];
-      image[pixel + 2] += rays->color_b[i];
+      image[pixel + 0] += rays->color_r[i] * contrib_factor;
+      image[pixel + 1] += rays->color_g[i] * contrib_factor;
+      image[pixel + 2] += rays->color_b[i] * contrib_factor;
     }
   }
   rays->count = writeIdx;
