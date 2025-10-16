@@ -1,3 +1,3 @@
 file(GLOB SOURCES CONFIGURE_DEPENDS "*.cpp" "*.h")
 
-add_subdirectory("math")
+add_subdirectory("render")
