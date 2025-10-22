@@ -2,6 +2,9 @@
 #include "render/Camera.h"
 #include "render/Scene.h"
 
+constexpr float epsilon = 0.0001f;
+constexpr bool backface_cull = true;
+
 class Renderer {
  public:
   Renderer();
@@ -11,7 +14,7 @@ class Renderer {
               const uint32_t samples);
 
  private:
-  void IntersectScene(Rays* input_rays);
+  void IntersectScene_NoBVH(Rays* input_rays);
   int CountActiveMasks(Rays* input_rays);
   void CompactRays(Rays* rays, float* image, float contrib_factor = 1);
 

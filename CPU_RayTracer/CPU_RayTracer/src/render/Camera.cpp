@@ -95,13 +95,12 @@ void Camera::GenerateRays(Rays& rays, int samples_per_pixel = 1) {
   // For jittered sampling
   __m256 inv_spp = _mm256_set1_ps(1.0f / float(samples_per_pixel));
 
-  // Depth of field vectors
+  // Dof vectors
   __m256 aperture_vec = _mm256_set1_ps(_aperture * 0.5f);
   __m256 focus_dist_vec = _mm256_set1_ps(_focus_dist);
 
   int idx = 0;
 
-  // Initialize random state for each SIMD lane
   __m256i rand_state = _mm256_set_epi32(12345678, 23456789, 34567890, 45678901,
                                         56789012, 67890123, 78901234, 89012345);
   for (int sample = 0; sample < samples_per_pixel; sample++) {
