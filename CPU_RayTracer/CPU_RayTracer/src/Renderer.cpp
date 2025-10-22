@@ -2,25 +2,12 @@
 
 #include <iostream>
 
-#define STB_IMAGE_IMPLEMENTATION
-#include "../includes/stb_image.h"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-
-#include "../includes/stb_image_write.h"
+#include "../includes/simd_helper.h"
+#include "../includes/stb_image_incl.h"
 
 Renderer::Renderer() {
-  _scene = new Scene(100);
-  _scene->count = 100;
-
-  for (size_t i = 0; i < 100; i++) {
-    _scene->center_x[i] = 0.f;
-    _scene->center_y[i] = 0.f;
-    _scene->center_z[i] = 2.f;
-    _scene->radius[i] = 1.1f;
-    _scene->mat_r[i] = 1.f;
-    _scene->mat_g[i] = 0.f;
-    _scene->mat_b[i] = 0.f;
-  }
+  _scene = new Scene(100, 1000);
+  _scene->LoadScene("demo");
 }
 
 Renderer::~Renderer() { delete _scene; }
@@ -36,13 +23,13 @@ void Renderer::Render(const char* filename, const uint32_t width,
   auto padded_ray_count = padded_width * height * samples;
   float r_samples = 1.f / samples;
   Camera camera(padded_width, height, 90.0f, glm::vec3(0.0f, 0.0f, 0.0f),
-                glm::vec3(0.0f, 0.0f, 1.0f), 0.0f, 1.0f);
+                glm::vec3(0.0f, 0.0f, 1.0f), 0.f, 1.0f);
 
   Rays* rays = new Rays(padded_ray_count);
   camera.GenerateRays(*rays, samples);
 
   while (rays->count > 0) {
-    IntersectScene(rays);
+    IntersectScene_NoBVH(rays);
 
     int active = CountActiveMasks(rays);
     if (active < rays->count * 0.5f) {
@@ -62,7 +49,14 @@ void Renderer::Render(const char* filename, const uint32_t width,
   delete[] final_image;
 }
 
-void Renderer::IntersectScene(Rays* input_rays) {
+// This is the most basic single hit scene tracing with no lighting
+// 8 rays tested per primitive
+// Will this supprot Bounces?
+// I know I will support bounces but this is already noticably slow with a
+// limited scene. A BVH is a really obvious optimization and while I would like
+// to have a comparison with bounces between a no BVH & BVH, I think time could
+// be better spent elsewhere.
+void Renderer::IntersectScene_NoBVH(Rays* input_rays) {
   for (int i = 0; i < input_rays->count; i += 8) {
     __m256 ox = _mm256_loadu_ps(&input_rays->origin_x[i]);
     __m256 oy = _mm256_loadu_ps(&input_rays->origin_y[i]);
@@ -83,97 +77,94 @@ void Renderer::IntersectScene(Rays* input_rays) {
     __m256 hit_center_y = _mm256_setzero_ps();
     __m256 hit_center_z = _mm256_setzero_ps();
 
-    for (int j = 0; j < _scene->count; ++j) {
-      __m256 cx = _mm256_set1_ps(_scene->center_x[j]);
-      __m256 cy = _mm256_set1_ps(_scene->center_y[j]);
-      __m256 cz = _mm256_set1_ps(_scene->center_z[j]);
-      __m256 r = _mm256_set1_ps(_scene->radius[j]);
+    for (int j = 0; j < _scene->spheres.count; ++j) {
+      float sx = _scene->spheres.center_x[j];
+      float sy = _scene->spheres.center_y[j];
+      float sz = _scene->spheres.center_z[j];
 
-      // oc = origin - center
-      __m256 ocx = _mm256_sub_ps(ox, cx);
-      __m256 ocy = _mm256_sub_ps(oy, cy);
-      __m256 ocz = _mm256_sub_ps(oz, cz);
+      __m256 out_t;
+      __m256 valid = simd::IntersectSphere_NoBVH(ox, oy, oz, dx, dy, dz, sx, sy,
+                                                 sz, _scene->spheres.radius[j],
+                                                 t_min, t_max, out_t);
 
-      // quadratic coefficients (ray dir normalized assumption : a = 1)
-      __m256 b = _mm256_add_ps(
-          _mm256_mul_ps(ocx, dx),
-          _mm256_add_ps(_mm256_mul_ps(ocy, dy), _mm256_mul_ps(ocz, dz)));
+      __m256 closer =
+          _mm256_and_ps(valid, _mm256_cmp_ps(out_t, t_best, _CMP_LT_OQ));
+      t_best = _mm256_blendv_ps(t_best, out_t, closer);
 
-      // c = dot(oc,oc) - r^2
-      __m256 c = _mm256_sub_ps(
-          _mm256_add_ps(
-              _mm256_mul_ps(ocx, ocx),
-              _mm256_add_ps(_mm256_mul_ps(ocy, ocy), _mm256_mul_ps(ocz, ocz))),
-          _mm256_mul_ps(r, r));
+      __m256 r = _mm256_set1_ps(_scene->spheres.mat_r[j]);
+      __m256 g = _mm256_set1_ps(_scene->spheres.mat_g[j]);
+      __m256 b = _mm256_set1_ps(_scene->spheres.mat_b[j]);
 
-      // discriminant = b*b - c
-      __m256 b2 = _mm256_mul_ps(b, b);
-      __m256 disc = _mm256_sub_ps(b2, c);
+      best_r = _mm256_blendv_ps(best_r, r, closer);
+      best_g = _mm256_blendv_ps(best_g, g, closer);
+      best_b = _mm256_blendv_ps(best_b, b, closer);
 
-      // disc > 0 ?
-      __m256 discMask = _mm256_cmp_ps(disc, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
-      // no lane has intersection with this sphere
-      if (_mm256_movemask_ps(discMask) == 0) continue;
+      __m256 cx = _mm256_set1_ps(sx);
+      __m256 cy = _mm256_set1_ps(sy);
+      __m256 cz = _mm256_set1_ps(sz);
 
-      // sqrt(disc)
-      __m256 sqd = _mm256_sqrt_ps(disc);
-      __m256 t0 = _mm256_sub_ps(_mm256_mul_ps(_mm256_set1_ps(-1.0f), b),
-                                sqd);  // -b - sqrt
-      __m256 t1 = _mm256_add_ps(_mm256_mul_ps(_mm256_set1_ps(-1.0f), b),
-                                sqd);  // -b + sqrt
-
-      // choose nearer positive root: prefer t0 if > t_min, else t1
-      __m256 t0_gt_t_min = _mm256_cmp_ps(t0, t_min, _CMP_GT_OQ);
-      __m256 t_candidate =
-          _mm256_blendv_ps(t1, t0, t0_gt_t_min);  // if t0>t_min use t0 else t1
-
-      // valid = discMask && (t_candidate > t_min) && (t_candidate < t_best)
-      __m256 gt_tMin = _mm256_cmp_ps(t_candidate, t_min, _CMP_GT_OQ);
-      __m256 lt_tBest = _mm256_cmp_ps(t_candidate, t_best, _CMP_LT_OQ);
-      __m256 valid = _mm256_and_ps(discMask, _mm256_and_ps(gt_tMin, lt_tBest));
-
-      // update t_best, and store sphere color/center for lanes where valid
-      t_best = _mm256_blendv_ps(t_best, t_candidate,
-                                valid);  // if valid, t_best = t_candidate
-
-      __m256 sr = _mm256_set1_ps(_scene->mat_r[j]);
-      __m256 sg = _mm256_set1_ps(_scene->mat_g[j]);
-      __m256 sb = _mm256_set1_ps(_scene->mat_b[j]);
-
-      best_r = _mm256_blendv_ps(best_r, sr, valid);
-      best_g = _mm256_blendv_ps(best_g, sg, valid);
-      best_b = _mm256_blendv_ps(best_b, sb, valid);
-
-      hit_center_x = _mm256_blendv_ps(hit_center_x, cx, valid);
-      hit_center_y = _mm256_blendv_ps(hit_center_y, cy, valid);
-      hit_center_z = _mm256_blendv_ps(hit_center_z, cz, valid);
+      hit_center_x = _mm256_blendv_ps(hit_center_x, cx, closer);
+      hit_center_y = _mm256_blendv_ps(hit_center_y, cy, closer);
+      hit_center_z = _mm256_blendv_ps(hit_center_z, cz, closer);
     }
 
-    // Determine lanes that hit something: hit = t_best < original t_max
-    __m256 hit_mask = _mm256_cmp_ps(t_best, t_max, _CMP_LT_OQ);
+    for (int j = 0; j < _scene->tris.count; ++j) {
+      __m256 out_t;
+      __m256 out_u, out_v;
 
-    // compute hit point p = o + d * t_best
-    __m256 px = _mm256_add_ps(ox, _mm256_mul_ps(dx, t_best));
-    __m256 py = _mm256_add_ps(oy, _mm256_mul_ps(dy, t_best));
-    __m256 pz = _mm256_add_ps(oz, _mm256_mul_ps(dz, t_best));
+      __m256 valid = simd::IntersectTriangle_NoBVH(
+          ox, oy, oz, dx, dy, dz, _scene->tris.v0_x[j], _scene->tris.v0_y[j],
+          _scene->tris.v0_z[j], _scene->tris.v1_x[j], _scene->tris.v1_y[j],
+          _scene->tris.v1_z[j], _scene->tris.v2_x[j], _scene->tris.v2_y[j],
+          _scene->tris.v2_z[j], t_min, t_max, out_t, out_u, out_v);
 
-    // compute normal = normalize(p - hitCenter)
-    __m256 nx = _mm256_sub_ps(px, hit_center_x);
-    __m256 ny = _mm256_sub_ps(py, hit_center_y);
-    __m256 nz = _mm256_sub_ps(pz, hit_center_z);
+      __m256 closer =
+          _mm256_and_ps(valid, _mm256_cmp_ps(out_t, t_best, _CMP_LT_OQ));
 
-    // length and normalize
-    __m256 len2 = _mm256_add_ps(
-        _mm256_mul_ps(nx, nx),
-        _mm256_add_ps(_mm256_mul_ps(ny, ny), _mm256_mul_ps(nz, nz)));
-    __m256 inv_length = _mm256_rsqrt_ps(len2);  // approximate inverse sqrt
-    nx = _mm256_mul_ps(nx, inv_length);
-    ny = _mm256_mul_ps(ny, inv_length);
-    nz = _mm256_mul_ps(nz, inv_length);
+      t_best = _mm256_blendv_ps(t_best, out_t, closer);
+      __m256 r = _mm256_set1_ps(0.0f);
+      __m256 g = _mm256_set1_ps(0.1f);
+      __m256 b = _mm256_set1_ps(1.0f);
 
+      best_r = _mm256_blendv_ps(best_r, r, closer);
+      best_g = _mm256_blendv_ps(best_g, g, closer);
+      best_b = _mm256_blendv_ps(best_b, b, closer);
+
+      // Compute interpolated hit point using barycentric coords
+      // w = 1 - u - v
+      __m256 w =
+          _mm256_sub_ps(_mm256_set1_ps(1.0f), _mm256_add_ps(out_u, out_v));
+
+      // Interpolated position
+      __m256 hit_px = _mm256_add_ps(
+          _mm256_add_ps(
+              _mm256_mul_ps(w, _mm256_set1_ps(_scene->tris.v0_x[j])),
+              _mm256_mul_ps(out_u, _mm256_set1_ps(_scene->tris.v1_x[j]))),
+          _mm256_mul_ps(out_v, _mm256_set1_ps(_scene->tris.v2_x[j])));
+
+      __m256 hit_py = _mm256_add_ps(
+          _mm256_add_ps(
+              _mm256_mul_ps(w, _mm256_set1_ps(_scene->tris.v0_y[j])),
+              _mm256_mul_ps(out_u, _mm256_set1_ps(_scene->tris.v1_y[j]))),
+          _mm256_mul_ps(out_v, _mm256_set1_ps(_scene->tris.v2_y[j])));
+
+      __m256 hit_pz = _mm256_add_ps(
+          _mm256_add_ps(
+              _mm256_mul_ps(w, _mm256_set1_ps(_scene->tris.v0_z[j])),
+              _mm256_mul_ps(out_u, _mm256_set1_ps(_scene->tris.v1_z[j]))),
+          _mm256_mul_ps(out_v, _mm256_set1_ps(_scene->tris.v2_z[j])));
+
+      // Blend with previous best hit (only replace lanes that are closer)
+      hit_center_x = _mm256_blendv_ps(hit_center_x, hit_px, closer);
+      hit_center_y = _mm256_blendv_ps(hit_center_y, hit_py, closer);
+      hit_center_z = _mm256_blendv_ps(hit_center_z, hit_pz, closer);
+    }
     __m256 out_r = best_r;
     __m256 out_g = best_g;
     __m256 out_b = best_b;
+
+    // Determine lanes that hit something: hit = t_best < original t_max
+    __m256 hit_mask = _mm256_cmp_ps(t_best, t_max, _CMP_LT_OQ);
 
     // background color for misses
     __m256 miss_mask = _mm256_cmp_ps(hit_mask, _mm256_setzero_ps(), _CMP_EQ_OQ);
@@ -190,12 +181,13 @@ void Renderer::IntersectScene(Rays* input_rays) {
     out_g = _mm256_blendv_ps(out_g, sky_g, miss_mask);
     out_b = _mm256_blendv_ps(out_b, sky_b, miss_mask);
 
-    // store colors back to ray arrays (as floats)
+    // store colors to ray
     _mm256_storeu_ps(&input_rays->color_r[i], out_r);
     _mm256_storeu_ps(&input_rays->color_g[i], out_g);
     _mm256_storeu_ps(&input_rays->color_b[i], out_b);
 
-    // mark these lanes as terminated (mask = 0) since this is single-hit tracer
+    // mark these lanes as terminated since this is a single-hit tracer
+    // TODO: bounces
     __m256i zeroi = _mm256_setzero_si256();
     _mm256_store_si256((__m256i*)&input_rays->mask[i], zeroi);
   }
@@ -206,9 +198,7 @@ int Renderer::CountActiveMasks(Rays* input_rays) {
 
   for (int i = 0; i < input_rays->count; i += 8) {
     __m256i mask_vec = _mm256_load_si256((__m256i*)&input_rays->mask[i]);
-
-    int bitmask = _mm256_movemask_ps(_mm256_castsi256_ps(mask_vec));
-    total += __popcnt(bitmask);  // Count 1-bits
+    total += simd::ActiveMaskCount(_mm256_castsi256_ps(mask_vec));
   }
 
   return total;

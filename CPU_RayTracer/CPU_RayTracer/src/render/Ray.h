@@ -10,6 +10,7 @@ class Rays {
 
   int capacity;
   int count;
+  int *mask;
   int *pixel_index;
   float *origin_x;
   float *origin_y;
@@ -22,5 +23,4 @@ class Rays {
   float *color_r;
   float *color_g;
   float *color_b;
-  int *mask;
 };
