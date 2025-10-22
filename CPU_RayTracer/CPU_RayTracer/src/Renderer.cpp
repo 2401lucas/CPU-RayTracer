@@ -28,14 +28,8 @@ void Renderer::Render(const char* filename, const uint32_t width,
   Rays* rays = new Rays(padded_ray_count);
   camera.GenerateRays(*rays, samples);
 
-  while (rays->count > 0) {
-    IntersectScene_NoBVH(rays);
-
-    int active = CountActiveMasks(rays);
-    if (active < rays->count * 0.5f) {
-      CompactRays(rays, image, r_samples);
-    }
-  }
+  IntersectScene_NoBVH(rays);
+  CompactRays(rays, image, r_samples);
 
   for (int i = 0; i < total_pixels; i++) {
     final_image[i] = (uint8_t)(std::min(1.0f, image[i]) * 255.0f);
