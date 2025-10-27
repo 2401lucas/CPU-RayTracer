@@ -68,11 +68,6 @@ void Renderer::Render(const char* filename, const uint32_t width,
 
 // This is the most basic single hit scene tracing with no lighting
 // 8 rays tested per primitive
-// Will this supprot Bounces?
-// I know I will support bounces but this is already noticably slow with a
-// limited scene. A BVH is a really obvious optimization and while I would like
-// to have a comparison with bounces between a no BVH & BVH, I think time could
-// be better spent elsewhere.
 void Renderer::IntersectScene_NoBVH(Rays* rays) {
   for (int i = 0; i < rays->count; i += 8) {
     __m256 ox = _mm256_load_ps(&rays->origin_x[i]);
@@ -91,37 +86,6 @@ void Renderer::IntersectScene_NoBVH(Rays* rays) {
     __m256 hit_center_x = _mm256_setzero_ps();
     __m256 hit_center_y = _mm256_setzero_ps();
     __m256 hit_center_z = _mm256_setzero_ps();
-
-    for (int j = 0; j < _scene->spheres.count; ++j) {
-      float sx = _scene->spheres.center_x[j];
-      float sy = _scene->spheres.center_y[j];
-      float sz = _scene->spheres.center_z[j];
-
-      __m256 out_t;
-      __m256 valid =
-          simd::IntersectSphere(ox, oy, oz, dx, dy, dz, sx, sy, sz,
-                                _scene->spheres.radius[j], t_min, t_max, out_t);
-
-      __m256 closer =
-          _mm256_and_ps(valid, _mm256_cmp_ps(out_t, t_best, _CMP_LT_OQ));
-      t_best = _mm256_blendv_ps(t_best, out_t, closer);
-
-      __m256 r = _mm256_set1_ps(_scene->spheres.mat_r[j]);
-      __m256 g = _mm256_set1_ps(_scene->spheres.mat_g[j]);
-      __m256 b = _mm256_set1_ps(_scene->spheres.mat_b[j]);
-
-      best_r = _mm256_blendv_ps(best_r, r, closer);
-      best_g = _mm256_blendv_ps(best_g, g, closer);
-      best_b = _mm256_blendv_ps(best_b, b, closer);
-
-      __m256 cx = _mm256_set1_ps(sx);
-      __m256 cy = _mm256_set1_ps(sy);
-      __m256 cz = _mm256_set1_ps(sz);
-
-      hit_center_x = _mm256_blendv_ps(hit_center_x, cx, closer);
-      hit_center_y = _mm256_blendv_ps(hit_center_y, cy, closer);
-      hit_center_z = _mm256_blendv_ps(hit_center_z, cz, closer);
-    }
 
     for (int j = 0; j < _scene->tris.count; ++j) {
       __m256 out_t;
