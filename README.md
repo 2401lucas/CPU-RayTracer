@@ -22,7 +22,7 @@ SIMD Vectorization using AVX intrinsics for parallel ray-triangle intersection t
 Up to 8-way BVH(bounding volume hierarchy) speeding up ray intersections. Each model is processed into a BLAS(Bottom Level Acceleration Structure). The BVH width varies from 2-8 child nodes depending on triangle density. This is to avoid 8 nodes with 1 or 2 triangles each since the cost to intersect fewer than 8 triangles is nearly identical thanks to SIMD.
 
 ### Multithreading
-- Multithreading with a custom work stealing implementation supporting batched jobs. This is done by enqueueing work into each thread and if a thread runs out of work, it will check other threads work queue and will "steal" their work until all the work is completed. This is particularly useful for Ray Tracing as rays with an early exit condition, such as a miss, have less work to do. [Read more about the implementation here](https://github.com/2401lucas/CPP-MT-JobStealing)
+Multithreading with a custom work stealing implementation supporting batched jobs. This is done by enqueueing work into each thread and if a thread runs out of work, it will check other threads work queue and will "steal" their work until all the work is completed. This is particularly useful for Ray Tracing as rays with an early exit condition, such as a miss, have less work to do. [Read more about the implementation here](https://github.com/2401lucas/CPP-MT-JobStealing)
 
 ### Other Key Features
 - .gltf Model loading
