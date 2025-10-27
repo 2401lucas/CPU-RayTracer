@@ -10,7 +10,7 @@ class Rays {
 
   int capacity;
   int count;
-  int *mask;
+  float *contrib;
   int *pixel_index;
   float *origin_x;
   float *origin_y;
