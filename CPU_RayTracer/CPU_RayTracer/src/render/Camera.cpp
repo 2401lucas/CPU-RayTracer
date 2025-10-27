@@ -4,6 +4,8 @@
 #include <glm/gtc/constants.hpp>
 #include <iostream>
 
+#include "../includes/simd_helper.h"
+
 Camera::Camera(int width, int height, float fov_deg, glm::vec3 pos,
                glm::vec3 look_at, float aperture_size, float focus_dist) {
   Update(width, height, fov_deg, pos, look_at, aperture_size, focus_dist);
@@ -33,37 +35,6 @@ void Camera::Update(int width, int height, float fov_deg, glm::vec3 pos,
                  _viewport_v / glm::vec3(2.f);
 }
 
-inline __m256 simd_random(__m256i& state) {
-  // Xorshift algo
-  __m256i t = state;
-  t = _mm256_xor_si256(t, _mm256_slli_epi32(t, 13));
-  t = _mm256_xor_si256(t, _mm256_srli_epi32(t, 17));
-  t = _mm256_xor_si256(t, _mm256_slli_epi32(t, 5));
-  state = t;
-
-  // Convert to float [0, 1]
-  __m256i mask = _mm256_set1_epi32(0x7FFFFFFF);
-  __m256i t_masked = _mm256_and_si256(t, mask);
-  return _mm256_mul_ps(_mm256_cvtepi32_ps(t_masked),
-                       _mm256_set1_ps(1.0f / 2147483647.0f));
-}
-
-inline void random_in_unit_disk(__m256i& state, __m256& out_x, __m256& out_y) {
-  __m256 two = _mm256_set1_ps(2.0f);
-  __m256 one = _mm256_set1_ps(1.0f);
-
-  // Generate random points in [-1, 1] square and reject if outside unit circle
-  __m256 r1 = _mm256_sub_ps(_mm256_mul_ps(simd_random(state), two), one);
-  __m256 r2 = _mm256_sub_ps(_mm256_mul_ps(simd_random(state), two), one);
-
-  __m256 len_sq = _mm256_add_ps(_mm256_mul_ps(r1, r1), _mm256_mul_ps(r2, r2));
-  __m256 mask = _mm256_cmp_ps(len_sq, one, _CMP_LE_OQ);
-
-  // Use rejection sampling results (hack - TODO: full rejection loop)
-  out_x = _mm256_and_ps(r1, mask);
-  out_y = _mm256_and_ps(r2, mask);
-}
-
 void Camera::GenerateRays(Rays& rays, int samples_per_pixel = 1) {
   rays.count = _width * _height * samples_per_pixel;
   __m256 origin_x_vec = _mm256_set1_ps(_position.x);
@@ -86,9 +57,7 @@ void Camera::GenerateRays(Rays& rays, int samples_per_pixel = 1) {
   __m256 height_vec = _mm256_set1_ps(float(_height));
 
   __m256 tmin_vec = _mm256_set1_ps(0.001f);
-  __m256 tmax_vec = _mm256_set1_ps(1e30f);
-
-  __m256i mask_vec = _mm256_set1_epi32(0xFFFFFFFF);
+  __m256 tmax_vec = _mm256_set1_ps(FLT_MAX);
 
   __m256 zero_vec = _mm256_setzero_ps();
 
@@ -113,12 +82,11 @@ void Camera::GenerateRays(Rays& rays, int samples_per_pixel = 1) {
 
         // AA (stratified sampling)
         if (samples_per_pixel > 1) {
-          __m256 jitter_x = simd_random(rand_state);
-          __m256 jitter_y = simd_random(rand_state);
+          __m256 jitter_x = simd::Random(rand_state);
+          __m256 jitter_y = simd::Random(rand_state);
           x_coords = _mm256_add_ps(x_coords, jitter_x);
           y_coords = _mm256_add_ps(y_coords, jitter_y);
         } else {
-          // Center of pixel for single sample
           x_coords = _mm256_add_ps(x_coords, _mm256_set1_ps(0.5f));
           y_coords = _mm256_add_ps(y_coords, _mm256_set1_ps(0.5f));
         }
@@ -141,7 +109,7 @@ void Camera::GenerateRays(Rays& rays, int samples_per_pixel = 1) {
                                             _mm256_mul_ps(v, vert_z_vec)));
         dir_z = _mm256_sub_ps(dir_z, origin_z_vec);
 
-        // Apply depth of field if enabled
+        // Apply dof if enabled
         __m256 ray_origin_x = origin_x_vec;
         __m256 ray_origin_y = origin_y_vec;
         __m256 ray_origin_z = origin_z_vec;
@@ -149,7 +117,7 @@ void Camera::GenerateRays(Rays& rays, int samples_per_pixel = 1) {
         if (use_dof) {
           // Generate random point on lens (unit disk scaled by aperture)
           __m256 disk_x, disk_y;
-          random_in_unit_disk(rand_state, disk_x, disk_y);
+          simd::RandomInUnitDisc(rand_state, disk_x, disk_y);
           disk_x = _mm256_mul_ps(disk_x, aperture_vec);
           disk_y = _mm256_mul_ps(disk_y, aperture_vec);
 
@@ -181,16 +149,7 @@ void Camera::GenerateRays(Rays& rays, int samples_per_pixel = 1) {
           dir_z = _mm256_sub_ps(focus_z, ray_origin_z);
         }
 
-        // Normalize
-        __m256 len_sq =
-            _mm256_add_ps(_mm256_mul_ps(dir_x, dir_x),
-                          _mm256_add_ps(_mm256_mul_ps(dir_y, dir_y),
-                                        _mm256_mul_ps(dir_z, dir_z)));
-        __m256 inv_len = _mm256_rsqrt_ps(len_sq);  // Fast reciprocal sqrt
-
-        dir_x = _mm256_mul_ps(dir_x, inv_len);
-        dir_y = _mm256_mul_ps(dir_y, inv_len);
-        dir_z = _mm256_mul_ps(dir_z, inv_len);
+        simd::Normalize(dir_x, dir_y, dir_z);
 
         _mm256_store_ps(&rays.origin_x[idx], ray_origin_x);
         _mm256_store_ps(&rays.origin_y[idx], ray_origin_y);
@@ -203,7 +162,6 @@ void Camera::GenerateRays(Rays& rays, int samples_per_pixel = 1) {
         _mm256_store_ps(&rays.t_min[idx], tmin_vec);
         _mm256_store_ps(&rays.t_max[idx], tmax_vec);
 
-        _mm256_store_si256((__m256i*)&rays.mask[idx], mask_vec);
         _mm256_store_ps(&rays.color_r[idx], zero_vec);
         _mm256_store_ps(&rays.color_g[idx], zero_vec);
         _mm256_store_ps(&rays.color_b[idx], zero_vec);

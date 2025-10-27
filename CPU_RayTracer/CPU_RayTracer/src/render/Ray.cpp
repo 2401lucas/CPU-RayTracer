@@ -13,7 +13,6 @@ Rays::Rays(int max_rays) : capacity(max_rays), count(0) {
   color_r = (float*)_mm_malloc(max_rays * sizeof(float), 32);
   color_g = (float*)_mm_malloc(max_rays * sizeof(float), 32);
   color_b = (float*)_mm_malloc(max_rays * sizeof(float), 32);
-  mask = (int*)_mm_malloc(max_rays * sizeof(int), 32);
 }
 
 Rays::~Rays() {
@@ -29,5 +28,4 @@ Rays::~Rays() {
   _mm_free(color_r);
   _mm_free(color_g);
   _mm_free(color_b);
-  _mm_free(mask);
 }

@@ -1,4 +1,5 @@
 #pragma once
+#include "../includes/ThreadPool.h"
 #include "render/Camera.h"
 #include "render/Scene.h"
 
@@ -14,8 +15,9 @@ class Renderer {
               const uint32_t samples);
 
  private:
-  void IntersectScene_NoBVH(Rays* input_rays);
-  int CountActiveMasks(Rays* input_rays);
+  void IntersectScene_NoBVH(Rays* rays);
+  void IntersectScene_BVH8(Rays* rays);
+  void IntersectScene_Mt(Rays* rays);
   void CompactRays(Rays* rays, float* image, float contrib_factor = 1);
 
   Scene* _scene;
